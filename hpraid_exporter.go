@@ -184,8 +184,10 @@ func initTemporaryZipPath() {
 		log.Fatalf("failed to create temporary zip path: %s", err)
 	}
 	log.Debug("Using %s as temporary zip directory", temporaryZipPath)
+}
 
-	// set up signal handler to clean up on kill/Ctrl+C:
+func setupExitHandler() {
+	// Properly clean up before exit'ing on kill or Ctrl+C
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -212,6 +214,7 @@ func main() {
 
 	initTemporaryZipPath()
 	defer cleanTemporaryZipPath()
+	setupExitHandler()
 	exporter, err := newHpraidExporter(*utilityPath, filepath.Join(temporaryZipPath, "hpraid_exporter.zip"))
 	if err != nil {
 		panic(err)
