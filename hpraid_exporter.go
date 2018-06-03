@@ -14,13 +14,18 @@
 package main
 
 import (
-	"sync"
 	"archive/zip"
 	"encoding/xml"
 	"errors"
 	"flag"
+	"io/ioutil"
 	"net/http"
+	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"sync"
+	"syscall"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
@@ -35,6 +40,8 @@ var (
 		prometheus.BuildFQName("hpraid", "", "errors"),
 		"Errors in the diagnostic report reported by the RAID controller.",
 		[]string{"device", "message", "severity"}, nil)
+
+	temporaryZipPath = ""
 )
 
 // ADUReport is the top level structure contained in the XML report file
@@ -96,7 +103,7 @@ func (m *Message) Collect(devicePrefix string, ch chan<- prometheus.Metric) {
 // RAID hardware. It then converts the diagnostic report into Prometheus
 // metrics.
 type HpraidExporter struct {
-	collectLock sync.Mutex
+	collectLock      sync.Mutex
 	utilityPath      string
 	temporaryZipPath string
 }
@@ -170,17 +177,42 @@ func newHpraidExporter(utilityPath string, temporaryZipPath string) (*HpraidExpo
 	}, nil
 }
 
+func initTemporaryZipPath() {
+	var err error
+	temporaryZipPath, err = ioutil.TempDir("", "hpraid")
+	if err != nil {
+		log.Fatalf("failed to create temporary zip path: %s", err)
+	}
+	log.Debug("Using %s as temporary zip directory", temporaryZipPath)
+
+	// set up signal handler to clean up on kill/Ctrl+C:
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		log.Info("Cleaning up")
+		cleanTemporaryZipPath()
+		os.Exit(0)
+	}()
+}
+
+func cleanTemporaryZipPath() {
+	os.RemoveAll(temporaryZipPath)
+}
+
 func main() {
 	var (
-		listenAddress    = flag.String("web.listen-address", ":9423", "Address to listen on for web interface and telemetry.")
-		metricsPath      = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
-		utilityPath      = flag.String("hpraid.utility-path", "ssacli", "Path of the ssacli utility.")
-		temporaryZipPath = flag.String("hpraid.temporary-zip-path", "/tmp/hpraid_exporter.zip", "Path where a temporary zip file may be stored.")
+		listenAddress = flag.String("web.listen-address", ":9423", "Address to listen on for web interface and telemetry.")
+		metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
+		utilityPath   = flag.String("hpraid.utility-path", "ssacli", "Path of the ssacli utility.")
 	)
 	flag.Parse()
 
 	log.Info("Starting hpraid_exporter")
-	exporter, err := newHpraidExporter(*utilityPath, *temporaryZipPath)
+
+	initTemporaryZipPath()
+	defer cleanTemporaryZipPath()
+	exporter, err := newHpraidExporter(*utilityPath, filepath.Join(temporaryZipPath, "hpraid_exporter.zip"))
 	if err != nil {
 		panic(err)
 	}
