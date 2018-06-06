@@ -18,14 +18,13 @@ import (
 	"encoding/xml"
 	"errors"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"sync"
-	"syscall"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
@@ -40,8 +39,6 @@ var (
 		prometheus.BuildFQName("hpraid", "", "errors"),
 		"Errors in the diagnostic report reported by the RAID controller.",
 		[]string{"device", "message", "severity"}, nil)
-
-	temporaryZipPath = ""
 )
 
 // ADUReport is the top level structure contained in the XML report file
@@ -103,9 +100,8 @@ func (m *Message) Collect(devicePrefix string, ch chan<- prometheus.Metric) {
 // RAID hardware. It then converts the diagnostic report into Prometheus
 // metrics.
 type HpraidExporter struct {
-	collectLock      sync.Mutex
-	utilityPath      string
-	temporaryZipPath string
+	collectLock sync.Mutex
+	utilityPath string
 }
 
 // Describe metrics provided by the HP RAID exporter.
@@ -114,13 +110,20 @@ func (e *HpraidExporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- hpraidErrorsDesc
 }
 
-func collectFromUtility(utilityPath string, temporaryZipPath string, ch chan<- prometheus.Metric) error {
+func collectFromUtility(utilityPath string, ch chan<- prometheus.Metric) error {
+	tempDir, err := ioutil.TempDir("", "hpraid")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary zip path: %s", err)
+	}
+	log.Debug("Using %s as temporary zip directory", tempDir)
+	defer os.RemoveAll(tempDir)
+
+	temporaryZipPath := filepath.Join(tempDir, "hpraid_exporter.zip")
 	// Invoke diagnostic utility in such a way that it writes into a zip file.
 	cmd := exec.Command(utilityPath, "ctrl", "all", "diag", "file="+temporaryZipPath)
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-
 	// Look for the XML file stored in the zip file.
 	z, err := zip.OpenReader(temporaryZipPath)
 	if err != nil {
@@ -158,7 +161,7 @@ func collectFromUtility(utilityPath string, temporaryZipPath string, ch chan<- p
 // Collect metrics from HP RAID hardware.
 func (e *HpraidExporter) Collect(ch chan<- prometheus.Metric) {
 	e.collectLock.Lock()
-	err := collectFromUtility(e.utilityPath, e.temporaryZipPath, ch)
+	err := collectFromUtility(e.utilityPath, ch)
 	e.collectLock.Unlock()
 	if err == nil {
 		ch <- prometheus.MustNewConstMetric(
@@ -170,36 +173,10 @@ func (e *HpraidExporter) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-func newHpraidExporter(utilityPath string, temporaryZipPath string) (*HpraidExporter, error) {
+func newHpraidExporter(utilityPath string) (*HpraidExporter, error) {
 	return &HpraidExporter{
-		utilityPath:      utilityPath,
-		temporaryZipPath: temporaryZipPath,
+		utilityPath: utilityPath,
 	}, nil
-}
-
-func initTemporaryZipPath() {
-	var err error
-	temporaryZipPath, err = ioutil.TempDir("", "hpraid")
-	if err != nil {
-		log.Fatalf("failed to create temporary zip path: %s", err)
-	}
-	log.Debug("Using %s as temporary zip directory", temporaryZipPath)
-}
-
-func setupExitHandler() {
-	// Properly clean up before exit'ing on kill or Ctrl+C
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigs
-		log.Info("Cleaning up")
-		cleanTemporaryZipPath()
-		os.Exit(0)
-	}()
-}
-
-func cleanTemporaryZipPath() {
-	os.RemoveAll(temporaryZipPath)
 }
 
 func main() {
@@ -212,10 +189,7 @@ func main() {
 
 	log.Info("Starting hpraid_exporter")
 
-	initTemporaryZipPath()
-	defer cleanTemporaryZipPath()
-	setupExitHandler()
-	exporter, err := newHpraidExporter(*utilityPath, filepath.Join(temporaryZipPath, "hpraid_exporter.zip"))
+	exporter, err := newHpraidExporter(*utilityPath)
 	if err != nil {
 		panic(err)
 	}
