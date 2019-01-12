@@ -24,13 +24,13 @@ Though this exporter only provide metrics for errors for the time being
 attributes. All of those metrics should already be part of the
 `ADUReport.xml` file that is used by this exporter.
 
+## Building this exporter
+
+The exporter can be built using Bazel:
+
+    bazel build //...
+
 ## Using this exporter
-
-The following shell script around Docker can be used to build a
-statically linked executable that can be deployed on virtually any
-x86-based Linux system:
-
-    ./build_static.sh
 
 The following command will start the exporter, causing it to listen on
 TCP port 9423:
