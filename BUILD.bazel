@@ -21,4 +21,5 @@ go_binary(
     name = "hpraid_exporter",
     embed = [":go_default_library"],
     visibility = ["//visibility:public"],
+    pure = "on",
 )
