@@ -26,19 +26,9 @@ attributes. All of those metrics should already be part of the
 
 ## Building this exporter
 
-The exporter can be build using either of the following:
-
-### Bazel
+The exporter can be built using Bazel:
 
     bazel build //...
-
-## Shell script
-
-The following shell script around Docker can be used to build a
-statically linked executable that can be deployed on virtually any
-x86-based Linux system:
-
-    ./build_static.sh
 
 ## Using this exporter
 
